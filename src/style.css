@@ -1,0 +1,44 @@
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #ccc;
+  width: 100vw;
+  height: 100vh;
+}
+
+body,
+#app {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+#app .content {
+  position: relative;
+  box-shadow: 0px 0px 2px 2px #eee;
+  width: min(100vw, calc(100vh * 16/9));
+  aspect-ratio: 16/9;
+  cursor: pointer;
+  cursor: none;
+}
+
+#app canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: transparent;
+  touch-action: none;
+  pointer-events: none;
+}
+
+#app .pixelated {
+  image-rendering: pixelated;
+}
+
+#app .interactive {
+  pointer-events: all;
+  cursor: none;
+}
