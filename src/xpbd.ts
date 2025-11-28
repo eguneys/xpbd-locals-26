@@ -87,6 +87,11 @@ function polarRotation2x2(A: Mat2){
   return matMul(A, invSqrt);
 }
 
+const TIRE_RADIUS = 40
+const R_tire = TIRE_RADIUS
+const N = 6
+let ParticleRadius = 2 * Math.PI * R_tire / N / 2;
+
 // ---- Particle and Cluster classes ----
 class Particle {
 
@@ -96,6 +101,8 @@ class Particle {
     invMass: number
     xPred: Vec2
     prev: Vec2
+
+    radius = ParticleRadius
 
   constructor(x: number, y: number, mass=1){
     this.x = vec2(x,y);      // position
@@ -262,6 +269,31 @@ class ShapeCluster2D {
       p.xPred = add(p.xPred, delta);
     }
   }
+
+
+  computeClusterEnclosingCircle() {
+    // center is COM
+    const com = this.computeCOMPred();
+
+    let maxDist = 0;
+    for (let p of this.particles) {
+        const dx = p.xPred.x - com.x;
+        const dy = p.xPred.y - com.y;
+        const d = Math.hypot(dx, dy) + (p.radius ?? 0);
+        if (d > maxDist) maxDist = d;
+    }
+
+    return { center: com, radius: maxDist };
+}
+
+  updateClusterGrounded(walls: Wall[]) {
+    const hull = this.computeClusterEnclosingCircle();
+    this.is_grounded = walls.some(wall => {
+      // approximate: hull touches or slightly below floor
+      const closestPoint = closestPointOnSegment(wall.A, wall.B, hull.center);
+      return hull.center.y - hull.radius <= closestPoint.y + 1e-4;
+    });
+  }
 }
 
 // ---- Simulator: integrates, collision placeholder, shape clusters ----
@@ -271,20 +303,21 @@ class Simulator2D {
     clusters: ShapeCluster2D[]
     gravity: Vec2
     iterations: number
-    platforms: Platform[]
+    //platforms: Platform[]
+    walls: Wall[]
 
     tireController!: TireController2DPlus
 
 
   constructor(){
-    this.platforms = []
+    this.walls = []
     this.particles = [];
     this.clusters = []; // array of ShapeCluster2D
     this.gravity = vec2(0, 2000); // y-down (pixels/sec^2) - tune to your world
     this.iterations = 3; // solver iterations per step
   }
 
-  addPlatform(p: Platform){ this.platforms.push(p); return p; }
+  addWalls(w: Wall[]){ this.walls.push(...w); }
   addParticle(p: Particle){ this.particles.push(p); return p; }
   addCluster(cluster: ShapeCluster2D){ this.clusters.push(cluster); return cluster; }
   addTireController(tire_controller: TireController2DPlus) {
@@ -334,16 +367,19 @@ class Simulator2D {
       ctrl.applyTorque(dt)
       ctrl.variableJump(dt)
 
+      //ctrl.applyRadialSprings(dt)
+
       for (let p of ctrl.cluster.particles) {
           p.xPred = add(p.x, mulScalar(p.v, dt));
       }
 
-      /*
     // 2) initial collision pass (optional)
     //this.resolveCollisions(this.particles);
-    for (let cl of this.clusters)
-        resolveFlatCollisions(cl, this.platforms, dt, this.gravity.y, 0.8)
-    */
+    for (let cl of this.clusters) {
+      //resolveFlatCollisions(cl, this.platforms, dt, this.gravity.y, 0.8)
+      resolveSlopedWallCollisions(cl, this.walls)
+      resolveClusterHullCollision(cl, this.walls)
+    }
 
     // 3) shape-matching solver iterations (XPBD-like)
     for(let iter=0; iter<this.iterations; iter++){
@@ -356,12 +392,18 @@ class Simulator2D {
       // do a final collision pass (ensures non-penetration after projections)
       //this.resolveCollisions(this.particles);
 
-        for (let cl of this.clusters)
-            resolveFlatCollisions(cl, this.platforms, dt, this.gravity.y, 0.8)
+        for (let cl of this.clusters) {
+            //resolveFlatCollisions(cl, this.platforms, dt, this.gravity.y, 0.8)
+          resolveSlopedWallCollisions(cl, this.walls)
+          resolveClusterHullCollision(cl, this.walls)
+        }
 
 
     }
 
+    for (let cl of this.clusters) {
+      cl.updateClusterGrounded(this.walls)
+    }
 
 
 
@@ -375,8 +417,9 @@ class Simulator2D {
   }
 }
 
-type Platform = { x1: number, x2: number, y: number }
+//type Platform = { x1: number, x2: number, y: number }
 
+/*
 // platforms: array of { y, x1, x2 }
 // gravityY: simulator gravity y-acceleration (e.g. 1200)
 // mu: friction coefficient (e.g. 0.8)
@@ -431,10 +474,11 @@ function resolveFlatCollisions(cl: ShapeCluster2D, platforms: Platform[], dt: nu
     }
   }
 }
+  */
 
 
 // ---- tiny example usage ----
-function demo(platforms: Platform[]){
+function demo(trackPointss: Vec2[][]){
   const sim = new Simulator2D();
 
   // build a small rectangular patch of particles (4 particles) as a cluster
@@ -449,7 +493,7 @@ function demo(platforms: Platform[]){
 
   const tireParticles = [];
   const N = 6; // circle particles
-  const center = { x: 400, y: 100 }, radius = 32;
+  const center = { x: 400, y: 100 }, radius = TIRE_RADIUS;
   for (let i = 0; i < N; i++) {
       const angle = i / N * 2 * Math.PI;
       const x = center.x + radius * Math.cos(angle);
@@ -459,9 +503,10 @@ function demo(platforms: Platform[]){
       tireParticles.push(p);
   }
 
-    for (let p of platforms) {
-        sim.addPlatform(p)
-    }
+  for (let trackPoints of trackPointss) {
+    const trackSegments = createTrackSegments(trackPoints, 0.8, 0.5)
+    sim.addWalls(trackSegments)
+  }
 
 
   // rest positions relative to initial center-of-mass (they should be local q_i)
@@ -600,9 +645,13 @@ export class TireController2DPlus {
 
     HORIZONTAL_SPEED: number
 
-    constructor(cluster: ShapeCluster2D, input: InputController) {
+    restRadius: number
+
+    constructor(cluster: ShapeCluster2D, input: InputController, radius: number) {
         this.cluster = cluster;
         this.input = input;
+
+        this.restRadius = radius
 
         // Controller state
         this.angularVelocity = 0;
@@ -629,6 +678,8 @@ export class TireController2DPlus {
         this.GRAVITY = 3000;              // positive down
 
         this.HORIZONTAL_SPEED = 1000
+
+
     }
 
     handleInput(dt: number) {
@@ -692,40 +743,6 @@ export class TireController2DPlus {
         }
     }
 
-    resolveFlatCollisions(platforms: Platform[], dt: number) {
-        const GROUND_TOL = 20;
-
-        this.cluster.is_grounded = false;
-
-        for (let p of this.cluster.particles) {
-            for (let plat of platforms) {
-                // horizontal check
-                if (p.xPred.x < plat.x1 || p.xPred.x > plat.x2) continue;
-
-                const penetration = plat.y - p.xPred.y; // + below, - above
-
-                if (penetration < -GROUND_TOL) continue;
-                if (penetration > 20) continue;
-
-                this.cluster.is_grounded = true;
-
-                if (penetration > 0) {
-                    p.xPred.y += penetration;
-                    if (p.v.y > 0) p.v.y = 0;
-                }
-
-                // friction along x
-                const normalForce = p.m * Math.abs(this.GRAVITY);
-                const desiredImpulse = -p.v.x * p.m;
-                const maxF = this.GROUND_FRICTION * normalForce * dt;
-                const clamped = Math.max(-maxF, Math.min(maxF, desiredImpulse));
-                p.v.x += clamped / p.m;
-
-                break;
-            }
-        }
-    }
-
     applyTorque(dt: number) {
 
         let cl = this.cluster
@@ -783,15 +800,197 @@ export class TireController2DPlus {
         this.cluster.xbar = add(this.cluster.xbar, deltaCOM);
         for (let p of this.cluster.particles) p.xPred = add(p.xPred, deltaCOM);
     }
+
+
+  applyRadialSprings(dt: number, stiffness = 50, damping = 0.9) {
+    let cluster = this.cluster
+    const com = cluster.computeCOMPred(); // current COM prediction
+    for (let p of cluster.particles) {
+      let r = sub(p.xPred, com);
+      let rLen = Math.hypot(r.x, r.y);
+      let restLen = this.restRadius;
+
+      if (rLen === 0) continue;
+
+      let dir = { x: r.x / rLen, y: r.y / rLen };
+      let delta = rLen - restLen;
+
+      // Hooke's law + simple damping
+      let force = -stiffness * delta;
+
+      // apply to velocity
+      p.v.x += force * dir.x * dt;
+      p.v.y += force * dir.y * dt;
+
+      // optional damping along radial direction
+      let radialVel = p.v.x * dir.x + p.v.y * dir.y;
+      p.v.x -= radialVel * (1 - damping);
+      p.v.y -= radialVel * (1 - damping);
+    }
+  }
+
 }
+
+// Helper: closest point on a line segment
+function closestPointOnSegment(A: Vec2, B: Vec2, P: Vec2) {
+    const ABx = B.x - A.x;
+    const ABy = B.y - A.y;
+    const t = ((P.x - A.x) * ABx + (P.y - A.y) * ABy) / (ABx*ABx + ABy*ABy);
+    const clampedT = Math.max(0, Math.min(1, t));
+    return { x: A.x + ABx * clampedT, y: A.y + ABy * clampedT };
+}
+
+function resolveClusterHullCollision(cluster: ShapeCluster2D, walls: Wall[]) {
+    const hull = cluster.computeClusterEnclosingCircle();
+
+    for (let wall of walls) {
+        const A = wall.A;
+        const B = wall.B;
+
+        // closest point on segment
+        const ABx = B.x - A.x;
+        const ABy = B.y - A.y;
+        let t = ((hull.center.x - A.x) * ABx + (hull.center.y - A.y) * ABy) / (ABx*ABx + ABy*ABy);
+        t = Math.min(Math.max(t, 0.001), 0.999);
+        const Cx = A.x + ABx * t;
+        const Cy = A.y + ABy * t;
+
+        // penetration
+        const rx = hull.center.x - Cx;
+        const ry = hull.center.y - Cy;
+        const dist = Math.hypot(rx, ry);
+
+        if (dist >= hull.radius) continue;
+
+        const penetration = hull.radius - dist;
+
+        // normal
+        let nx = rx / dist;
+        let ny = ry / dist;
+
+        // optional: flip normal based on wall orientation
+        const len = Math.hypot(ABx, ABy);
+        let wx = -ABy / len;
+        let wy = ABx / len;
+        if ((hull.center.x - A.x)*wx + (hull.center.y - A.y)*wy < 0) {
+            wx = -wx;
+            wy = -wy;
+        }
+
+        nx = wx;
+        ny = wy;
+
+        // push cluster COM
+        let softness = 0.1
+        const com = cluster.computeCOMPred();
+        com.x += penetration * nx * softness;
+        com.y += penetration * ny * softness;
+
+
+
+        // distribute delta to particles (simple: proportional)
+        for (let p of cluster.particles) {
+            p.xPred.x += penetration * nx * softness;
+            p.xPred.y += penetration * ny * softness;
+        }
+    }
+}
+
+
+
+function resolveParticleWallCollision(p: Particle, wall: Wall) {
+  const A = wall.A;
+  const B = wall.B;
+
+  // 1️⃣ Closest point on segment
+  const ABx = B.x - A.x;
+  const ABy = B.y - A.y;
+  const t = ((p.xPred.x - A.x) * ABx + (p.xPred.y - A.y) * ABy) / (ABx * ABx + ABy * ABy);
+  const clampedT = Math.max(0, Math.min(1, t));
+  const Cx = A.x + ABx * clampedT;
+  const Cy = A.y + ABy * clampedT;
+
+  // 2️⃣ Distance vector
+  const rx = p.xPred.x - Cx;
+  const ry = p.xPred.y - Cy;
+  const dist = Math.hypot(rx, ry);
+
+  if (dist >= p.radius) return undefined; // no collision
+
+  const penetration = p.radius - dist;
+
+  // 3️⃣ Compute outward normal using wall orientation
+  let nx = -ABy / Math.hypot(ABx, ABy);
+  let ny = ABx / Math.hypot(ABx, ABy);
+
+  // check which side particle is on
+  const dot = (p.xPred.x - A.x) * nx + (p.xPred.y - A.y) * ny;
+  if (dot < 0) {
+    nx = -nx;
+    ny = -ny;
+  }
+
+  // 4️⃣ Push particle out along normal
+  p.xPred.x += penetration * nx;
+  p.xPred.y += penetration * ny;
+
+  // 5️⃣ Velocity response (elastic + friction)
+  const vn = p.v.x * nx + p.v.y * ny;
+  p.v.x -= (1 + (wall.restitution ?? 0.8)) * vn * nx;
+  p.v.y -= (1 + (wall.restitution ?? 0.8)) * vn * ny;
+
+  // friction along tangent
+  const tx = -ny;
+  const ty = nx;
+  const vt = p.v.x * tx + p.v.y * ty;
+  const friction = wall.friction ?? 0.5;
+  p.v.x -= vt * friction * tx;
+  p.v.y -= vt * friction * ty;
+  return { x: nx, y: ny }
+}
+
+
+
+
+// Resolve all particles in a cluster against multiple sloped walls
+function resolveSlopedWallCollisions(cluster: ShapeCluster2D, walls: Wall[]) {
+    for (let p of cluster.particles) {
+        for (let wall of walls) {
+            resolveParticleWallCollision(p, wall);
+        }
+    }
+}
+
+
+// --- 1. Convert corner points to wall segments ---
+function createTrackSegments(points: Vec2[], restitution = 0.8, friction = 0.8) {
+    const segments = [];
+    for (let i = 0; i < points.length - 1; i++) {
+        segments.push({
+            A: points[i],
+            B: points[i + 1],
+            restitution,
+            friction
+        });
+    }
+    return segments;
+}
+
+type Wall = {
+    A: {x: number, y: number}  // start point
+    B: {x: number, y: number}  // end point
+    restitution: number        // optional bounce factor
+    friction: number           // optional friction along the slope
+}
+
 
 let createSim = demo
 // --- Demo setup ---
-function demoTire(platforms: Platform[], input: InputController){
-  const sim = createSim(platforms); // from previous demo: small rectangular cluster
+function demoTire(trackPoints: Vec2[][], input: InputController){
+  const sim = createSim(trackPoints); // from previous demo: small rectangular cluster
 
   // Treat the cluster as a tire
-  let tire = new TireController2DPlus(sim.clusters[0], input)
+  let tire = new TireController2DPlus(sim.clusters[0], input, TIRE_RADIUS)
   sim.addTireController(tire)
 
   return { sim, tire };
