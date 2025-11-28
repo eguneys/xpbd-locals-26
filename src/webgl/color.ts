@@ -19,6 +19,8 @@ export class Color {
   static black = new Color(0, 0, 0, 255)
   static red = new Color(255, 0, 0, 255)
 
+  static grey = Color.hex(0xcccccc)
+
 
   get rgb() {
     return (this.r << 16) | (this.g << 8) | this.b
@@ -29,10 +31,20 @@ export class Color {
   }
 
 
+  r: number
+  g: number
+  b: number
+  a: number
+
 
   constructor(
-    readonly r: number, 
-    readonly g: number, 
-    readonly b: number, 
-    readonly a: number) {}
+    r: number, 
+    g: number, 
+    b: number, 
+    a: number) {
+      this.r = r
+      this.g = g
+      this.b = b
+      this.a = a
+    }
 }

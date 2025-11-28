@@ -8,6 +8,7 @@ export const GameAction = {
   DOWN: "DOWN",
   JUMP: "JUMP",
   ATTACK: "ATTACK",
+  ZOOM: "ZOOM",
 } as const;
 
 export type GameAction = typeof GameAction[keyof typeof GameAction];
@@ -26,7 +27,8 @@ const DEFAULT_BINDINGS: KeyBinding = {
   "KeyS": GameAction.DOWN,
   "Space": GameAction.JUMP,
   "KeyK": GameAction.JUMP,
-  "KeyJ": GameAction.ATTACK
+  "KeyJ": GameAction.ATTACK,
+  "KeyZ": GameAction.ZOOM
 };
 
 export class InputController {

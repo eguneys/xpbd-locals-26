@@ -1,4 +1,5 @@
 import { GameAction, InputController } from "./keyboard";
+import type { SceneName } from "./main";
 import { g } from "./webgl/gl_init";
 import { demoTire, type Simulator2D } from "./xpbd";
 
@@ -101,4 +102,10 @@ export function _render() {
 
     g.flush_to_screen()
 
+}
+
+
+let set_next_scene: SceneName | undefined = undefined
+export function next_scene() {
+    return set_next_scene
 }

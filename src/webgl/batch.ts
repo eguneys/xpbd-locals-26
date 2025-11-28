@@ -1,3 +1,5 @@
+import { Rectangle, Vec2 } from "../math/vec2";
+
 export class SpriteBatch {
   private gl: WebGL2RenderingContext;
   private maxSprites = 1000;
@@ -9,7 +11,12 @@ export class SpriteBatch {
   private shader: WebGLProgram;
   private texture: WebGLTexture | null = null;
 
-  constructor(gl: WebGL2RenderingContext, shader: WebGLProgram) {
+  private width: number
+  private height: number
+
+  constructor(gl: WebGL2RenderingContext, shader: WebGLProgram, width: number, height: number) {
+    this.width = width
+    this.height = height
     this.gl = gl;
     this.shader = shader;
     this.buffer = new Float32Array(this.maxSprites * 6 * this.vertexSize / 4);
@@ -41,6 +48,7 @@ export class SpriteBatch {
     this.texture = texture;
   }
 
+
   draw_tri(x: number[], y: number[], u: number[], v: number[], color = [1, 1, 1, 1]) {
     if (this.bufferIndex + 6 * this.vertexSize / 4 >= this.buffer.length) {
       this.flush();
@@ -65,19 +73,22 @@ export class SpriteBatch {
     }
   }
 
-  draw(x: number, y: number, w: number, h: number, u = 0, v = 0, u2 = 1, v2 = 1, color = [1, 1, 1, 1]) {
+  draw(x: number, y: number, w: number, h: number, u = 0, v = 0, u2 = 1, v2 = 1, color = [1, 1, 1, 1], theta: number = 0) {
     if (this.bufferIndex + 6 * this.vertexSize / 4 >= this.buffer.length) {
       this.flush();
     }
 
-    const vertices = [
-      [x, y, u, v],
-      [x + w, y, u2, v],
-      [x + w, y + h, u2, v2],
+    let cx = x + w / 2
+    let cy = y + h / 2
 
-      [x, y, u, v],
-      [x + w, y + h, u2, v2],
-      [x, y + h, u, v2]
+    const vertices = [
+      [...Vec2.rotate_point(x, y, theta, cx, cy).xy, u, v],
+      [...Vec2.rotate_point(x + w, y, theta, cx, cy).xy, u2, v],
+      [...Vec2.rotate_point(x + w, y + h, theta, cx, cy).xy, u2, v2],
+
+      [...Vec2.rotate_point(x, y, theta, cx, cy).xy, u, v],
+      [...Vec2.rotate_point(x + w, y + h, theta, cx, cy).xy, u2, v2],
+      [...Vec2.rotate_point(x, y + h, theta, cx, cy).xy, u, v2]
     ];
 
     for (const [px, py, pu, pv] of vertices) {
@@ -91,6 +102,42 @@ export class SpriteBatch {
       this.buffer[this.bufferIndex++] = color[3];
     }
   }
+
+  draw_rect(rect: Rectangle, u = 0, v = 0, u2 = 1, v2 = 1, color = [1, 1, 1, 1]) {
+    if (this.bufferIndex + 6 * this.vertexSize / 4 >= this.buffer.length) {
+      this.flush();
+    }
+
+
+    let [a, b, c, d] = rect.vertices
+
+
+    const vertices = [
+      [a.x, a.y, u, v],
+      [b.x, b.y, u2, v],
+      [c.x, c.y, u2, v2],
+
+      [a.x, a.y, u, v],
+      [c.x, c.y, u2, v2],
+      [d.x, d.y, u, v2]
+    ];
+
+    for (const [px, py, pu, pv] of vertices) {
+      this.buffer[this.bufferIndex++] = px / this.width
+      this.buffer[this.bufferIndex++] = py / this.height
+      this.buffer[this.bufferIndex++] = pu;
+      this.buffer[this.bufferIndex++] = pv;
+      this.buffer[this.bufferIndex++] = color[0];
+      this.buffer[this.bufferIndex++] = color[1];
+      this.buffer[this.bufferIndex++] = color[2];
+      this.buffer[this.bufferIndex++] = color[3];
+    }
+  }
+
+
+
+
+
 
   flush() {
     const gl = this.gl;

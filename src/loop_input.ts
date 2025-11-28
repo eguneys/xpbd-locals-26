@@ -28,8 +28,9 @@ export function Loop(update: (dt: number) => void, render: (alpha: number) => vo
 type XY = [number, number]
 export type TouchMouse = {
   on_up(n: XY): void
-  on_down(n: XY): void
+  on_down(n: XY, button: number): void
   on_move(n: XY): void
+  on_wheel(n: number): void
 }
 
 export function TouchMouse(el: HTMLElement, hooks: TouchMouse) {
@@ -47,7 +48,7 @@ export function TouchMouse(el: HTMLElement, hooks: TouchMouse) {
   function on_down(ev: PointerEvent) {
     el.setPointerCapture(ev.pointerId)
     let p = normalized(ev)
-    hooks.on_down(p)
+    hooks.on_down(p, ev.button)
   }
 
   function on_up(ev: PointerEvent) {
@@ -60,23 +61,28 @@ export function TouchMouse(el: HTMLElement, hooks: TouchMouse) {
     hooks.on_move(p)
   }
   
-  let cx = (el as HTMLCanvasElement).getContext('2d')!
   let bounds: DOMRect
   on_resize()
 
 
   function on_resize() {
     bounds = el.getBoundingClientRect()
-    cx.imageSmoothingEnabled = false
   }
 
   function on_scroll() {
     on_resize()
   }
 
+  function on_wheel(e: WheelEvent) {
+    e.preventDefault()
+
+    hooks.on_wheel(e.deltaY)
+  }
+
   el.addEventListener('pointerdown', on_down, { passive: false })
   el.addEventListener('pointermove', on_move, { passive: false })
   document.addEventListener('pointerup', on_up)
+  el.addEventListener('wheel', on_wheel, { passive: false})
 
 
   new ResizeObserver(on_resize).observe(el)

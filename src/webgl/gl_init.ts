@@ -1,12 +1,14 @@
 import vertexShader from './batch.vert'
 import fragmentShader from './batch.frag'
 
-import zoomVertexShader from './zoom.vert'
-import zoomFragmentShader from './zoom.frag'
+import shapeVShader from './shaders/def.vert'
+import shapeFShader from './shaders/shape.frag'
 
 import { createShaderProgram } from './shader';
 import { SpriteBatch } from './batch';
 import { loadTexture } from './texture';
+import { Color } from './color';
+import { Line, Matrix, Rectangle } from '../math/vec2';
 
 export type GL = {
     canvas: HTMLCanvasElement,
@@ -16,17 +18,24 @@ export type GL = {
     begin_render(): void
     begin_render_bg(): void
     begin_render_tiles(): void
-    draw(x: number, y: number, w: number, h: number, sx: number, sy: number, flip_x: boolean, theta?: number): void
     draw_tri(x: [number, number, number], y: [number, number, number], u: [number, number, number], sy: [number, number, number]): void
+    draw(x: number, y: number, w: number, h: number, sx: number, sy: number, flip_x: boolean, sw?: number, sh?: number): void
     end_render(): void
     flush_to_screen(): void
     clear(): void
     begin_stencil(): void,
     begin_stencil_bg(): void,
     end_stencil(): void
+    begin_shapes(): void
+    end_shapes(): void
+    fill_rect(x: number, y: number, w: number, h: number, color: Color, theta?: number): void
+    draw_line(x: number, y: number, x2: number, y2: number, thickness: number, color: Color): void
+    stroke_rect(x: number, y: number, w: number, h: number, color: Color, thickness: number, theta?: number): void
+    translate(x: number, y: number): void
+    scale(x: number, y: number): void
 }
 
-export const g = GL(320, 180)
+export const g = GL(1920, 1080)
 
 
 export function GL(width: number, height: number): GL {
@@ -38,12 +47,14 @@ export function GL(width: number, height: number): GL {
 
     const gl = canvas.getContext('webgl2', { antialias: false, depth: false, stencil: true })!;
 
+    const shape_shader = createShaderProgram(gl, shapeVShader, shapeFShader);
+    const shape_batch = new SpriteBatch(gl, shape_shader, width, height)
 
     const shader = createShaderProgram(gl, vertexShader, fragmentShader);
-    const batch = new SpriteBatch(gl, shader);
-    const screenShader = createShaderProgram(gl, zoomVertexShader, zoomFragmentShader);
+    const batch = new SpriteBatch(gl, shader, width, height);
 
-    gl.clearColor(130/255, 112/255, 148/255, 1)
+    //gl.clearColor(130/255, 112/255, 148/255, 1)
+    gl.clearColor(30/255, 30/255, 48/255, 1)
     gl.viewport(0, 0, width, height)
 
     gl.enable(gl.BLEND)
@@ -64,6 +75,12 @@ export function GL(width: number, height: number): GL {
     let batch_render_target = createRenderTarget(gl, width, height)
 
     let fullscreenQuadVAO = initFullscreenQuad(gl)
+
+    let t_x = 0
+    let t_y = 0
+
+    let s_x = 1
+    let s_y = 1
 
     return {
         canvas,
@@ -120,7 +137,6 @@ export function GL(width: number, height: number): GL {
             t_height = t_t_height
             batch.begin(texture)
         },
-
         draw_tri(x: [number, number, number], y: [number, number, number], u: [number, number, number], v: [number, number, number]) {
             let xx = [x[0] / width, x[1] / width, x[2] / width]
             let yy = [y[0] / height, y[1] / height, y[2] / height]
@@ -128,16 +144,11 @@ export function GL(width: number, height: number): GL {
             let vv = [v[0] / t_height, v[1] / t_height, v[2] / t_height]
             batch.draw_tri(xx, yy, uu, vv)
         },
-
-
-        draw(x: number, y: number, w: number, h: number, sx: number, sy: number, flip_x: boolean) {
+        draw(x: number, y: number, w: number, h: number, sx: number, sy: number, flip_x: boolean, sw: number = w, sh: number = h) {
             let u = sx / t_width
             let v = sy / t_height
-            let u2 = (sx + w) / t_width
-            let v2 = (sy + h) / t_height
-
-            x = Math.floor(x)
-            y = Math.floor(y)
+            let u2 = (sx + sw) / t_width
+            let v2 = (sy + sh) / t_height
 
             x /= width
             y /= height
@@ -148,7 +159,7 @@ export function GL(width: number, height: number): GL {
                 [u, u2] = [u2, u]
             }
 
-            batch.draw(x, y, w, h, u, v, u2, v2, [1, 1, 1, 1])
+            batch.draw(x, y, w, h, u, v, u2, v2)
         },
         end_render() {
             batch.flush()
@@ -156,14 +167,63 @@ export function GL(width: number, height: number): GL {
         flush_to_screen() {
             gl.bindFramebuffer(gl.FRAMEBUFFER, null)
 
-            gl.useProgram(screenShader)
+            //gl.useProgram(screenShader)
             gl.viewport(0, 0, width, height)
 
             renderFullscreenQuad(gl, batch_render_target.texture, fullscreenQuadVAO)
+        },
+        begin_shapes() {
+            shape_batch.begin(texture)
+        },
+        end_shapes() {
+            shape_batch.flush()
+        },
+        stroke_rect(x: number, y: number, w: number, h: number, color: Color, thickness: number, theta = 0) {
+            let r = Rectangle.make(x, y, w, h)
+
+            r = r.transform(Matrix.identity.rotate(theta).scale(s_x, s_y))
+
+            let [ax, ay] = r.vertices[0].xy
+            let [bx, by] = r.vertices[1].xy
+            let [cx, cy] = r.vertices[2].xy
+            let [dx, dy] = r.vertices[3].xy
+
+            this.draw_line(ax, ay, bx, by, thickness, color)
+            this.draw_line(bx, by, cx, cy, thickness, color)
+            this.draw_line(cx, cy, dx, dy, thickness, color)
+            this.draw_line(dx, dy, ax, ay, thickness, color)
+        },
+        fill_rect(x: number, y: number, w: number, h: number, color: Color, theta = 0) {
+            let rect = Rectangle.make(x, y, w, h)
+            rect = rect.transform(Matrix.identity.translate(t_x, t_y).scale(s_x, s_y))
+            shape_batch.draw_rect(rect, 0, 0, 0, 0, color.rgba)
+        },
+        draw_line(x: number, y: number, x2: number, y2: number, thickness: number, color: Color) {
+            let l = Line.make(x, y, x2, y2)
+            let n = l.normal
+
+            if (!n) {
+                return
+            }
+
+            let rect = l.extrude(thickness)
+
+            rect = rect.transform(Matrix.identity.translate(t_x, t_y).scale(s_x, s_y))
+
+            shape_batch.draw_rect(rect, 0, 0, 0, 0, color.rgba)
+
+        },
+        translate(x: number, y: number) {
+            t_x = x
+            t_y = y
+        },
+        scale(x: number, y: number) {
+            s_x = x
+            s_y = y
         }
+
     }
 }
-
 
 function createRenderTarget(gl: WebGL2RenderingContext, width: number, height: number) {
   const texture = gl.createTexture();

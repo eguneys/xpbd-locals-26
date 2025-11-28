@@ -19,8 +19,6 @@ body,
   box-shadow: 0px 0px 2px 2px #eee;
   width: min(100vw, calc(100vh * 16/9));
   aspect-ratio: 16/9;
-  cursor: pointer;
-  cursor: none;
 }
 
 #app canvas {
@@ -40,5 +38,4 @@ body,
 
 #app .interactive {
   pointer-events: all;
-  cursor: none;
 }
