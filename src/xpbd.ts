@@ -493,7 +493,7 @@ function demo(trackPointss: Vec2[][]){
 
   const tireParticles = [];
   const N = 6; // circle particles
-  const center = { x: 400, y: 100 }, radius = TIRE_RADIUS;
+  const center = { x: 0, y: -400 }, radius = TIRE_RADIUS;
   for (let i = 0; i < N; i++) {
       const angle = i / N * 2 * Math.PI;
       const x = center.x + radius * Math.cos(angle);
@@ -973,6 +973,13 @@ function createTrackSegments(points: Vec2[], restitution = 0.8, friction = 0.8) 
             friction
         });
     }
+    segments.push({
+      A: points[points.length - 1],
+      B: points[0],
+      restitution,
+      friction
+    })
+
     return segments;
 }
 

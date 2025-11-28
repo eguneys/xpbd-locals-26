@@ -138,8 +138,8 @@ export function GL(width: number, height: number): GL {
             batch.begin(texture)
         },
         draw_tri(x: [number, number, number], y: [number, number, number], u: [number, number, number], v: [number, number, number]) {
-            let xx = [x[0] / width, x[1] / width, x[2] / width]
-            let yy = [y[0] / height, y[1] / height, y[2] / height]
+            let xx = [(x[0] + t_x) / width, (x[1] + t_x) / width, (x[2] + t_x) / width]
+            let yy = [(y[0] + t_y) / height, (y[1] + t_y) / height, (y[2] + t_y) / height]
             let uu = [u[0] / t_width, u[1] / t_width, u[2] / t_width]
             let vv = [v[0] / t_height, v[1] / t_height, v[2] / t_height]
             batch.draw_tri(xx, yy, uu, vv)

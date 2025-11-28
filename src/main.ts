@@ -11,6 +11,7 @@ type Scene = {
     _update(delta: number): void
     _render(): void
     _after_render?: () => void
+    _destroy?: () => void
     next_scene(): SceneName | undefined
 }
 
@@ -25,6 +26,7 @@ let current_scene: Scene
 let next_scene: Scene
 
 function switch_to_scene(scene: Scene) {
+    next_scene._destroy?.()
     next_scene = scene
 }
 

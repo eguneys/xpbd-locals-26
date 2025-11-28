@@ -1,23 +1,27 @@
 import { GameAction, InputController } from "./keyboard";
 import type { SceneName } from "./main";
+import { get_map } from "./maps_store";
+import { Color } from "./webgl/color";
 import { g } from "./webgl/gl_init";
 import { demoTire, type Simulator2D } from "./xpbd";
 
 let kb: InputController
 let sim: Simulator2D
 
+/*
 const trackPointss = [
     [{ x: 0, y: 500 }, { x: 1200, y: 500 },],
     [{ x: 0, y: 300 }, { x: 500, y: 500 }, { x: 0, y: 350 }],
     [{ x: 10, y: 0 }, { x: 10, y: 200 }],
     [{x: 400, y: 200}, { x: 700, y: 200}]
 ];
+*/
 
 
 
 export function _init() {
     kb = new InputController()
-    let dt = demoTire(trackPointss, {
+    let dt = demoTire(get_map(), {
         get jump_pressed() {
             return kb.wasPressed(GameAction.JUMP)
         },
@@ -33,6 +37,10 @@ export function _init() {
 
 export function _update(delta: number) {
 
+    if (kb.wasReleased(GameAction.ATTACK)) {
+        set_next_scene = 'editor'
+    }
+
     sim.step(delta/1000)
     kb.update()
 }
@@ -42,14 +50,16 @@ export function _render() {
 
     g.clear()
 
-    /*
-    if (DEBUG) {
-        for (let p of sim.particles) {
-            g.
-            cx.fillRect(p.x.x / 3, p.x.y / 3, 3, 3)
-        }
+    g.translate(1920/ 2, 1080 / 2)
+
+    let hover = - 16
+    g.begin_shapes()
+    for (let wall of sim.walls) {
+        g.draw_line(wall.A.x + hover, wall.A.y + hover, wall.B.x + hover, wall.B.y + hover, 8, Color.white)
     }
 
+    g.end_shapes()
+    /*
 
     cx.strokeStyle = 'white'
     cx.lineWidth = 1
@@ -78,7 +88,6 @@ export function _render() {
 
     g.begin_render()
 
-    g.draw(0, 0, 32, 32, 0, 110, false)
     let ccx = 0, cy = 0
     for (let p of sim.particles) {
         ccx += p.x.x
@@ -95,17 +104,24 @@ export function _render() {
         let u: [number, number, number] = [0, 64, 32]
         let v: [number, number, number] = [210, 210, 210 + 64]
 
-        g.draw_tri([p1.x/3, p2.x/3, p3.x/3], [p1.y/3, p2.y/3, p3.y/3], u, v)
+        g.draw_tri([p1.x, p2.x, p3.x], [p1.y, p2.y, p3.y], u, v)
 
     }
     g.end_render()
 
-    g.flush_to_screen()
 
 }
+export function _destroy() {
+    kb.destroy()
+}
+
 
 
 let set_next_scene: SceneName | undefined = undefined
 export function next_scene() {
-    return set_next_scene
+    let res =  set_next_scene
+    if (res !== undefined){
+        set_next_scene = undefined
+        return res
+    }
 }

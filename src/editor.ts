@@ -1,6 +1,7 @@
 import { DragHandler } from "./drag";
 import { GameAction, InputController } from "./keyboard";
 import type { SceneName } from "./main";
+import { add_map, get_map } from "./maps_store";
 import { clickedEdge, type Poly } from "./math/polygon";
 import { Color } from "./webgl/color";
 import { g } from "./webgl/gl_init";
@@ -77,7 +78,7 @@ export function _init() {
     }
 
     drawing_points = []
-    existing_pps = []
+    existing_pps = get_map()
 
     t_error_drawing_lines = 0
 }
@@ -96,9 +97,13 @@ let area_center_y = area_y + area_height / 2
 
 let zoom_double_tap_timer: number
 
+let hovering_close_point: boolean
+
 export function _update(delta: number) {
 
-    if (kb.wasPressed(GameAction.ATTACK)) {
+
+    if (kb.wasReleased(GameAction.ATTACK)) {
+        add_map(existing_pps)
         set_next_scene = 'simulate'
     }
 
@@ -172,11 +177,21 @@ export function _update(delta: number) {
 
     t_error_drawing_lines -= delta / 1000
 
+    hovering_close_point = is_hover_close_point()
 
     kb.update()
     drag.update(delta)
 }
 
+function is_hover_close_point() {
+    if (drawing_points.length < 3) {
+        return false
+    }
+    let p = {x: cursor.world_x, y:cursor.world_y}
+    let c_edge = clickedEdge(p, drawing_points)
+
+    return c_edge === 0
+}
 
 function place_point() {
     let p = {x: cursor.world_x, y:cursor.world_y}
@@ -317,6 +332,11 @@ function grid() {
         g.draw_line(p.x, p.y, cursor.world_x, cursor.world_y, 4 / camera.zoom, Color.white)
     }
 
+    if (hovering_close_point) {
+        let p = drawing_points[0]
+        g.fill_rect(p.x - 10, p.y - 10, 20, 20, Color.red)
+    }
+
     for (let existing_points of existing_pps) {
         if (existing_points.length > 0) {
             let p = existing_points[0]
@@ -343,6 +363,9 @@ function grid() {
     g.scale(1, 1)
 }
 
+export function _destroy() {
+    kb.destroy()
+}
 
 let set_next_scene: SceneName | undefined = undefined
 export function next_scene() {
