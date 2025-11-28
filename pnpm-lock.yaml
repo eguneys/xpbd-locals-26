@@ -17,6 +17,9 @@ importers:
       vite:
         specifier: npm:rolldown-vite@7.2.5
         version: rolldown-vite@7.2.5
+      vite-plugin-glsl:
+        specifier: ^1.5.4
+        version: 1.5.4(rolldown-vite@7.2.5)
 
 packages:
 
@@ -293,6 +296,19 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
+  vite-plugin-glsl@1.5.4:
+    resolution: {integrity: sha512-EUmwL+IDK+dGDAlaKm89++k8aJ4qmHjLQxrngww3GLOOAQ4aZ48o9YR1ie7XPe08iDWlG+9Uh5V7oiZcXTUbyA==}
+    engines: {node: '>= 20.17.0', npm: '>= 10.8.3'}
+    peerDependencies:
+      '@rollup/pluginutils': ^5.x
+      esbuild: '>= 0.25'
+      vite: '>= 3.x'
+    peerDependenciesMeta:
+      '@rollup/pluginutils':
+        optional: true
+      esbuild:
+        optional: true
+
 snapshots:
 
   '@emnapi/core@1.7.1':
@@ -486,3 +502,7 @@ snapshots:
     optional: true
 
   typescript@5.9.3: {}
+
+  vite-plugin-glsl@1.5.4(rolldown-vite@7.2.5):
+    dependencies:
+      vite: rolldown-vite@7.2.5
