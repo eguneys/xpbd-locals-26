@@ -8,7 +8,7 @@ import { createShaderProgram } from './shader';
 import { SpriteBatch } from './batch';
 import { loadTexture } from './texture';
 import { Color } from './color';
-import { Line, Matrix, Rectangle } from '../math/vec2';
+import { Line, Matrix, Rectangle } from '../math/vec2_old';
 
 export type GL = {
     canvas: HTMLCanvasElement,

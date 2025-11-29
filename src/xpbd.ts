@@ -2,9 +2,19 @@
 // Simple 2D XPBD-ish meshless shape matching demo
 // Author: ChatGPT (adapted for user's request)
 
+
+const NB_ITERATIONS = 3
+const SHAPE_COMPLIANCE = 1e-4
+const SHAPE_STIFFNESS = 6.56
+const CLUSTER_COM_PUSH_SOFTNESS = 0.6
+
+
 // ---- linear algebra helpers for 2D ----
 
 type Vec2 = { x: number, y: number }
+
+function length(a: Vec2) { return Math.hypot(a.x, a.y); }
+function normalize(a: Vec2) { const l = length(a); return { x: a.x / l, y: a.y / l };  }
 
 function vec2(x=0,y=0){ return {x, y}; }
 export function add(a: Vec2,b: Vec2){ return {x: a.x+b.x, y: a.y+b.y}; }
@@ -286,6 +296,7 @@ class ShapeCluster2D {
     return { center: com, radius: maxDist };
 }
 
+/*
   updateClusterGrounded(walls: Wall[]) {
     const hull = this.computeClusterEnclosingCircle();
     this.is_grounded = walls.some(wall => {
@@ -294,6 +305,45 @@ class ShapeCluster2D {
       return hull.center.y - hull.radius <= closestPoint.y + 1e-4;
     });
   }
+    */
+
+
+  updateClusterGrounded(walls: Wall[]) {
+    const hull = this.computeClusterEnclosingCircle();
+    const skin = 1e-2;
+
+    this.is_grounded = walls.some(wall => {
+      const A = wall.A;
+      const B = wall.B;
+
+      // wall direction & normal
+      const dir = sub(B, A);
+      const len = length(dir);
+      if (len < 1e-8) return false;
+
+      const n = normalize(vec2(-dir.y, dir.x)); // outward normal
+
+      // signed distance from circle center to infinite line
+      const d = dot(sub(hull.center, A), n);
+
+      // Only consider if circle is within contact distance
+      if (d < 0 || d > hull.radius + skin) {
+        return false;
+      }
+
+      // Now check if the projected point lies on segment
+      const t = dot(sub(hull.center, A), dir) / (len * len);
+
+      // clamp t into slight tolerance
+      if (t < -0.01 || t > 1.01) {
+        return false;
+      }
+
+      // All conditions satisfied
+      return true;
+    });
+  }
+
 }
 
 // ---- Simulator: integrates, collision placeholder, shape clusters ----
@@ -314,7 +364,7 @@ class Simulator2D {
     this.particles = [];
     this.clusters = []; // array of ShapeCluster2D
     this.gravity = vec2(0, 2000); // y-down (pixels/sec^2) - tune to your world
-    this.iterations = 3; // solver iterations per step
+    this.iterations = NB_ITERATIONS; // solver iterations per step
   }
 
   addWalls(w: Wall[]){ this.walls.push(...w); }
@@ -378,7 +428,7 @@ class Simulator2D {
     for (let cl of this.clusters) {
       //resolveFlatCollisions(cl, this.platforms, dt, this.gravity.y, 0.8)
       resolveSlopedWallCollisions(cl, this.walls)
-      resolveClusterHullCollision(cl, this.walls)
+      //resolveClusterHullCollision(cl, this.walls)
     }
 
     // 3) shape-matching solver iterations (XPBD-like)
@@ -395,7 +445,7 @@ class Simulator2D {
         for (let cl of this.clusters) {
             //resolveFlatCollisions(cl, this.platforms, dt, this.gravity.y, 0.8)
           resolveSlopedWallCollisions(cl, this.walls)
-          resolveClusterHullCollision(cl, this.walls)
+          //resolveClusterHullCollision(cl, this.walls)
         }
 
 
@@ -405,6 +455,7 @@ class Simulator2D {
       cl.updateClusterGrounded(this.walls)
     }
 
+    console.log(cl.is_grounded)
 
 
     // 4) finalize positions and update velocities
@@ -514,7 +565,7 @@ function demo(trackPointss: Vec2[][]){
   const restQ = tireParticles.map(p => ({x: p.x.x, y: p.x.y}));
 
   // create cluster: low compliance -> stiff object
-  const cluster = new ShapeCluster2D(tireParticles, restQ, /*compliance=*/1e-3, /*stiffness=*/2.99);
+  const cluster = new ShapeCluster2D(tireParticles, restQ, /*compliance=*/SHAPE_COMPLIANCE, /*stiffness=*/SHAPE_STIFFNESS);
   sim.addCluster(cluster);
 
   return sim;
@@ -527,87 +578,7 @@ function demo(trackPointss: Vec2[][]){
 export { Particle, ShapeCluster2D, Simulator2D, demo };
 
 
-
 // --- Tire controller ---
-class TireController2D {
-
-    cluster: ShapeCluster2D
-    radius: number
-    desiredVelocity: Vec2
-    angularVelocity: number
-    frictionCoeff: number
-    groundY: number
-
-    static AIR_CONTROL = 0.1
-    static MAX_AIR_ANGULAR = 10
-
-    static AIR_DRAG = 0.51
-    static AIR_DRAG_LINEAR = 0.927
-
-  constructor(cluster: ShapeCluster2D, radius=20){
-    this.cluster = cluster;
-    this.radius = radius;
-    this.desiredVelocity = vec2(0,0); // translational velocity
-    this.angularVelocity = 0;         // rad/sec
-    this.frictionCoeff = 0.8
-    this.groundY = 100
-  }
-
-  applyAirDrag() {
-    if (this.cluster.is_grounded) return
-
-    this.angularVelocity *= TireController2D.AIR_DRAG
-
-    for (let p of this.cluster.particles) {
-        p.v.x *= TireController2D.AIR_DRAG_LINEAR
-    }
-  }
-
-    applyAirControl(dt: number, input: Vec2) {
-        if (this.cluster.is_grounded) return; // only apply in air
-
-        // Input.x = -1 (left) or 1 (right)
-        const targetAngular = input.x * TireController2D.MAX_AIR_ANGULAR;
-        const deltaAngular = targetAngular - this.angularVelocity;
-
-        this.angularVelocity += deltaAngular * TireController2D.AIR_CONTROL * dt;
-    }
-
-
-  // Call this before the simulation step
-  applyControl(dt: number){
-    const cl = this.cluster;
-
-    // --- 1. Apply rolling torque BEFORE COM shift ---
-    for(let p of cl.particles){
-      const r = sub(p.xPred, cl.xbar);
-      const tangential = {x:-r.y, y:r.x};
-      p.v = add(p.v, mulScalar(tangential, this.angularVelocity));
-    }
-
-    const angularImpulse = 0.0; // rad/sec
-    for (let p of cl.particles) {
-        const r = sub(p.xPred, cl.xbar);
-        const tangential = { x: -r.y, y: r.x };
-        p.v = add(p.v, mulScalar(tangential, angularImpulse));
-    }
-
-
-    // 3. friction at contacts
-    //const contactParticles = cl.particles.filter(p=>p.xPred.y>=this.groundY-1e-3);
-      const contactParticles = cl.particles.filter(p =>
-          p.xPred.y >= this.groundY - 1e-3 && sub(p.xPred, cl.xbar).y > 0
-      );
-    for(let p of contactParticles){
-      const vTang=p.v.x;
-      const normalForce = p.m * 8200
-      const maxFriction = this.frictionCoeff * normalForce * dt
-      const frictionImpulse=Math.max(-maxFriction, Math.min(maxFriction, -vTang * p.m));
-      p.v.x+=frictionImpulse / p.m;
-    }
-  }
-}
-
 
 type InputController = { 
     jump_pressed: boolean
@@ -773,7 +744,7 @@ export class TireController2DPlus {
         for (let p of contactParticles) {
             const vTang = p.v.x;
             const normalForce = p.m * 8200
-            const maxFriction = 0.8 * normalForce * dt
+            const maxFriction = 0.8 * this.GROUND_FRICTION * normalForce * dt
             const frictionImpulse = Math.max(-maxFriction, Math.min(maxFriction, -vTang * p.m));
             p.v.x += frictionImpulse / p.m;
         }
@@ -881,7 +852,7 @@ function resolveClusterHullCollision(cluster: ShapeCluster2D, walls: Wall[]) {
         ny = wy;
 
         // push cluster COM
-        let softness = 0.1
+        let softness = CLUSTER_COM_PUSH_SOFTNESS
         const com = cluster.computeCOMPred();
         com.x += penetration * nx * softness;
         com.y += penetration * ny * softness;
@@ -1003,4 +974,4 @@ function demoTire(trackPoints: Vec2[][], input: InputController){
   return { sim, tire };
 }
 
-export { demoTire, TireController2D }
+export { demoTire }

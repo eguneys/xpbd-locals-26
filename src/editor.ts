@@ -2,9 +2,12 @@ import { DragHandler } from "./drag";
 import { GameAction, InputController } from "./keyboard";
 import type { SceneName } from "./main";
 import { add_map, get_map } from "./maps_store";
-import { clickedEdge, type Poly } from "./math/polygon";
+import { buildPoly, findSegmentAtPoint, type Poly } from "./math/polygon";
+import type { Vec2 } from "./math/vec2";
 import { Color } from "./webgl/color";
 import { g } from "./webgl/gl_init";
+
+const FindSegmentThreshold = 64
 
 type Camera = {
     x: number
@@ -49,10 +52,12 @@ let cursor: Cursor
 
 let kb: InputController
 
-let drawing_points: Poly
-let existing_pps: Poly[]
+let drawing_points: Vec2[]
+let existing_polygons: Poly[]
 
-let t_error_drawing_lines: number
+
+let error_drawing_lines_timer: number
+let is_hovering_on_close_point: boolean
 
 export function _init() {
     set_next_scene = undefined
@@ -78,9 +83,10 @@ export function _init() {
     }
 
     drawing_points = []
-    existing_pps = get_map()
+    existing_polygons = get_map()
 
-    t_error_drawing_lines = 0
+    error_drawing_lines_timer = 0
+    is_hovering_on_close_point = false
 }
 
 const MIN_ZOOM = 0.8
@@ -97,13 +103,11 @@ let area_center_y = area_y + area_height / 2
 
 let zoom_double_tap_timer: number
 
-let hovering_close_point: boolean
-
 export function _update(delta: number) {
 
 
     if (kb.wasReleased(GameAction.ATTACK)) {
-        add_map(existing_pps)
+        add_map(existing_polygons)
         set_next_scene = 'simulate'
     }
 
@@ -175,50 +179,57 @@ export function _update(delta: number) {
     cursor.prev_y = cursor.y
 
 
-    t_error_drawing_lines -= delta / 1000
+    error_drawing_lines_timer -= delta / 1000
 
-    hovering_close_point = is_hover_close_point()
+
+    let world_cursor = { x: cursor.world_x, y: cursor.world_y }
+    is_hovering_on_close_point = findSegmentAtPoint(drawing_points, world_cursor, FindSegmentThreshold) === 0
 
     kb.update()
     drag.update(delta)
-}
-
-function is_hover_close_point() {
-    if (drawing_points.length < 3) {
-        return false
-    }
-    let p = {x: cursor.world_x, y:cursor.world_y}
-    let c_edge = clickedEdge(p, drawing_points)
-
-    return c_edge === 0
 }
 
 function place_point() {
     let p = {x: cursor.world_x, y:cursor.world_y}
 
     if (drawing_points.length === 0) {
-        for (let i = 0; i < existing_pps.length; i++) {
-            let existing_pp = existing_pps[i]
+        for (let i = 0; i < existing_polygons.length; i++) {
+            let e_poly = existing_polygons[i]
 
-            if (clickedEdge(p, existing_pp) !== undefined) {
-                existing_pps.splice(i, 1)
+            if (findSegmentAtPoint(e_poly.points, p, FindSegmentThreshold) !== -1) {
+                existing_polygons.splice(i, 1)
                 return
             }
         }
     }
 
-    let c_edge = clickedEdge(p, drawing_points)
+
+
+    let c_edge = findSegmentAtPoint(drawing_points, p, FindSegmentThreshold)
     if (c_edge === 0) {
-        if (drawing_points.length >= 3) {
-            existing_pps.push(drawing_points)
+        try  {
+            let poly = buildPoly(drawing_points)
+            existing_polygons.push(poly)
+
+            drawing_points = []
+        } catch (e) {
+            error_drawing_lines_timer = 0.5
         }
-        drawing_points = []
         return
     }
 
-    if (c_edge !== undefined) {
-        t_error_drawing_lines = 0.5
+    if (c_edge !== -1) {
+        error_drawing_lines_timer = 0.5
         return
+    }
+
+    if (drawing_points.length > 2) {
+        try {
+            buildPoly([...drawing_points, p])
+        } catch {
+            error_drawing_lines_timer = 0.5
+            return
+        }
     }
 
     drawing_points.push(p)
@@ -314,7 +325,7 @@ function grid() {
 
     let drawing_lines_color = Color.grey
 
-    if (t_error_drawing_lines % 0.2 > 0.1) {
+    if (error_drawing_lines_timer % 0.2 > 0.1) {
         drawing_lines_color = Color.red
     }
 
@@ -332,27 +343,13 @@ function grid() {
         g.draw_line(p.x, p.y, cursor.world_x, cursor.world_y, 4 / camera.zoom, Color.white)
     }
 
-    if (hovering_close_point) {
+    if (is_hovering_on_close_point) {
         let p = drawing_points[0]
         g.fill_rect(p.x - 10, p.y - 10, 20, 20, Color.red)
     }
 
-    for (let existing_points of existing_pps) {
-        if (existing_points.length > 0) {
-            let p = existing_points[0]
-            let p2
-
-
-            for (let i = 1; i < existing_points.length; i++) {
-                p2 = existing_points[i]
-
-                g.draw_line(p.x, p.y, p2.x, p2.y, 8 / camera.zoom, Color.white)
-                p = p2
-            }
-
-            p2 = existing_points[0]
-            g.draw_line(p.x, p.y, p2.x, p2.y, 8 / camera.zoom, Color.white)
-        }
+    for (let polygon of existing_polygons) {
+        draw_polygon(polygon)
     }
 
 
@@ -362,6 +359,26 @@ function grid() {
     g.translate(0, 0)
     g.scale(1, 1)
 }
+
+
+function draw_polygon(polygon: Poly) {
+
+    let p = polygon.points[0]
+    let p2
+
+    for (let i = 1; i < polygon.points.length; i++) {
+
+        p2 = polygon.points[i]
+
+        g.draw_line(p.x, p.y, p2.x, p2.y, 8 / camera.zoom, Color.white)
+
+        p = p2
+    }
+
+    p2 = polygon.points[0]
+    g.draw_line(p.x, p.y, p2.x, p2.y, 8 / camera.zoom, Color.white)
+}
+
 
 export function _destroy() {
     kb.destroy()

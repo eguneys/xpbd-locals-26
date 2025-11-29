@@ -1,4 +1,4 @@
-import { Rectangle, Vec2 } from "../math/vec2";
+import { Rectangle, Vec2 } from "../math/vec2_old";
 
 export class SpriteBatch {
   private gl: WebGL2RenderingContext;
