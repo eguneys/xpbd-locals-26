@@ -7,7 +7,7 @@ import type { Vec2 } from "./math/vec2";
 import { Color } from "./webgl/color";
 import { g } from "./webgl/gl_init";
 
-const FindSegmentThreshold = 64
+const FindSegmentThreshold = 24
 
 type Camera = {
     x: number
@@ -167,6 +167,9 @@ export function _update(delta: number) {
 
         if (drag.down_button === 0 && !cursor.is_panning) {
             place_point()
+        }
+        if (drag.down_button === 2) {
+            drawing_points = []
         }
     }
 
@@ -361,7 +364,7 @@ function grid() {
 }
 
 
-function draw_polygon(polygon: Poly) {
+export function draw_polygon(polygon: Poly) {
 
     let p = polygon.points[0]
     let p2

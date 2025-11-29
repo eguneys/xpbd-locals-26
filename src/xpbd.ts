@@ -2,25 +2,16 @@
 // Simple 2D XPBD-ish meshless shape matching demo
 // Author: ChatGPT (adapted for user's request)
 
+import { pointInPolygon, type Poly } from "./math/polygon"
+import { add, dot, length, mulScalar, normalize, sub, vec2, type Vec2 } from "./math/vec2"
+
 
 const NB_ITERATIONS = 3
 const SHAPE_COMPLIANCE = 1e-4
 const SHAPE_STIFFNESS = 6.56
-const CLUSTER_COM_PUSH_SOFTNESS = 0.6
 
 
 // ---- linear algebra helpers for 2D ----
-
-type Vec2 = { x: number, y: number }
-
-function length(a: Vec2) { return Math.hypot(a.x, a.y); }
-function normalize(a: Vec2) { const l = length(a); return { x: a.x / l, y: a.y / l };  }
-
-function vec2(x=0,y=0){ return {x, y}; }
-export function add(a: Vec2,b: Vec2){ return {x: a.x+b.x, y: a.y+b.y}; }
-function sub(a: Vec2,b: Vec2){ return {x: a.x-b.x, y: a.y-b.y}; }
-function mulScalar(v: Vec2,s: number){ return {x: v.x*s, y: v.y*s}; }
-export function dot(a: Vec2,b: Vec2){ return a.x*b.x + a.y*b.y; }
 
 type Mat2 = { a: number, b: number, c: number, d: number }
 // 2x2 matrix stored as {a,b,c,d} = [[a,b],[c,d]]
@@ -308,6 +299,7 @@ class ShapeCluster2D {
     */
 
 
+  /*
   updateClusterGrounded(walls: Wall[]) {
     const hull = this.computeClusterEnclosingCircle();
     const skin = 1e-2;
@@ -343,6 +335,7 @@ class ShapeCluster2D {
       return true;
     });
   }
+    */
 
 }
 
@@ -353,21 +346,20 @@ class Simulator2D {
     clusters: ShapeCluster2D[]
     gravity: Vec2
     iterations: number
-    //platforms: Platform[]
-    walls: Wall[]
+    polygons: Poly[]
 
     tireController!: TireController2DPlus
 
 
   constructor(){
-    this.walls = []
+    this.polygons = []
     this.particles = [];
     this.clusters = []; // array of ShapeCluster2D
     this.gravity = vec2(0, 2000); // y-down (pixels/sec^2) - tune to your world
     this.iterations = NB_ITERATIONS; // solver iterations per step
   }
 
-  addWalls(w: Wall[]){ this.walls.push(...w); }
+  addPolygons(p: Poly[]){ this.polygons.push(...p); }
   addParticle(p: Particle){ this.particles.push(p); return p; }
   addCluster(cluster: ShapeCluster2D){ this.clusters.push(cluster); return cluster; }
   addTireController(tire_controller: TireController2DPlus) {
@@ -427,8 +419,9 @@ class Simulator2D {
     //this.resolveCollisions(this.particles);
     for (let cl of this.clusters) {
       //resolveFlatCollisions(cl, this.platforms, dt, this.gravity.y, 0.8)
-      resolveSlopedWallCollisions(cl, this.walls)
+      //resolveSlopedWallCollisions(cl, this.walls)
       //resolveClusterHullCollision(cl, this.walls)
+      resolvePolygonCollisions(cl, this.polygons, dt)
     }
 
     // 3) shape-matching solver iterations (XPBD-like)
@@ -444,16 +437,20 @@ class Simulator2D {
 
         for (let cl of this.clusters) {
             //resolveFlatCollisions(cl, this.platforms, dt, this.gravity.y, 0.8)
-          resolveSlopedWallCollisions(cl, this.walls)
+          //resolveSlopedWallCollisions(cl, this.walls)
           //resolveClusterHullCollision(cl, this.walls)
+
+          resolvePolygonCollisions(cl, this.polygons, dt)
         }
 
 
     }
 
+    /*
     for (let cl of this.clusters) {
       cl.updateClusterGrounded(this.walls)
     }
+      */
 
     console.log(cl.is_grounded)
 
@@ -529,9 +526,10 @@ function resolveFlatCollisions(cl: ShapeCluster2D, platforms: Platform[], dt: nu
 
 
 // ---- tiny example usage ----
-function demo(trackPointss: Vec2[][]){
+function demo(polygons: Poly[]){
   const sim = new Simulator2D();
 
+  sim.addPolygons(polygons)
   // build a small rectangular patch of particles (4 particles) as a cluster
   /*
   const particles = [];
@@ -544,7 +542,7 @@ function demo(trackPointss: Vec2[][]){
 
   const tireParticles = [];
   const N = 6; // circle particles
-  const center = { x: 0, y: -400 }, radius = TIRE_RADIUS;
+  const center = { x: -200, y: -400 }, radius = TIRE_RADIUS;
   for (let i = 0; i < N; i++) {
       const angle = i / N * 2 * Math.PI;
       const x = center.x + radius * Math.cos(angle);
@@ -554,10 +552,6 @@ function demo(trackPointss: Vec2[][]){
       tireParticles.push(p);
   }
 
-  for (let trackPoints of trackPointss) {
-    const trackSegments = createTrackSegments(trackPoints, 0.8, 0.5)
-    sim.addWalls(trackSegments)
-  }
 
 
   // rest positions relative to initial center-of-mass (they should be local q_i)
@@ -802,73 +796,150 @@ export class TireController2DPlus {
 
 }
 
-// Helper: closest point on a line segment
-function closestPointOnSegment(A: Vec2, B: Vec2, P: Vec2) {
-    const ABx = B.x - A.x;
-    const ABy = B.y - A.y;
-    const t = ((P.x - A.x) * ABx + (P.y - A.y) * ABy) / (ABx*ABx + ABy*ABy);
-    const clampedT = Math.max(0, Math.min(1, t));
-    return { x: A.x + ABx * clampedT, y: A.y + ABy * clampedT };
-}
-
-function resolveClusterHullCollision(cluster: ShapeCluster2D, walls: Wall[]) {
-    const hull = cluster.computeClusterEnclosingCircle();
-
-    for (let wall of walls) {
-        const A = wall.A;
-        const B = wall.B;
-
-        // closest point on segment
-        const ABx = B.x - A.x;
-        const ABy = B.y - A.y;
-        let t = ((hull.center.x - A.x) * ABx + (hull.center.y - A.y) * ABy) / (ABx*ABx + ABy*ABy);
-        t = Math.min(Math.max(t, 0.001), 0.999);
-        const Cx = A.x + ABx * t;
-        const Cy = A.y + ABy * t;
-
-        // penetration
-        const rx = hull.center.x - Cx;
-        const ry = hull.center.y - Cy;
-        const dist = Math.hypot(rx, ry);
-
-        if (dist >= hull.radius) continue;
-
-        const penetration = hull.radius - dist;
-
-        // normal
-        let nx = rx / dist;
-        let ny = ry / dist;
-
-        // optional: flip normal based on wall orientation
-        const len = Math.hypot(ABx, ABy);
-        let wx = -ABy / len;
-        let wy = ABx / len;
-        if ((hull.center.x - A.x)*wx + (hull.center.y - A.y)*wy < 0) {
-            wx = -wx;
-            wy = -wy;
-        }
-
-        nx = wx;
-        ny = wy;
-
-        // push cluster COM
-        let softness = CLUSTER_COM_PUSH_SOFTNESS
-        const com = cluster.computeCOMPred();
-        com.x += penetration * nx * softness;
-        com.y += penetration * ny * softness;
-
-
-
-        // distribute delta to particles (simple: proportional)
-        for (let p of cluster.particles) {
-            p.xPred.x += penetration * nx * softness;
-            p.xPred.y += penetration * ny * softness;
+function resolvePolygonCollisions(cluster: ShapeCluster2D, polygons: Poly[], dt: number) {
+    for (let p of cluster.particles) {
+        for (let wall of polygons) {
+            resolveParticlePolygon(p, wall, { dt });
         }
     }
 }
 
 
+/**
+ * resolveParticlePolygon - robust version
+ *
+ * Resolves collision between a particle and a polygon.
+ * Works for convex and concave polygons, handles edge/vertex collisions,
+ * automatically computes normals, and avoids false positives from far-away edges.
+ */
+function resolveParticlePolygon(
+  particle: Particle,
+  poly: Poly,
+  options?: {
+    dt?: number;
+    restitution?: number;
+    friction?: number;
+    slop?: number;
+    allowVertexCollisions?: boolean;
+  }
+) {
+  const dt = options?.dt ?? 1.0;
+  const restitution = options?.restitution ?? 0.0;
+  const friction = options?.friction ?? 0.2;
+  const slop = options?.slop ?? 1e-3;
+  const allowVertex = options?.allowVertexCollisions ?? true;
 
+  const verts = poly.points;
+  const p = particle.xPred; // predicted position
+  const r = particle.radius;
+
+  let bestPenetration = -Infinity;
+  let bestNormal: Vec2 | null = null;
+  let bestContactPoint: Vec2 | null = null;
+  let contactIsVertex = false;
+
+  // Helper: closest point on segment AB to point P
+  function closestPointOnSegment(A: Vec2, B: Vec2, P: Vec2) {
+    const AB = sub(B, A);
+    const t = Math.max(0, Math.min(1, dot(sub(P, A), AB) / dot(AB, AB)));
+    return { point: add(A, mulScalar(AB, t)), t };
+  }
+
+  // --- 1) Edge collisions ---
+  for (let i = 0; i < verts.length; i++) {
+    const a = verts[i];
+    const b = verts[(i + 1) % verts.length];
+
+    const cp = closestPointOnSegment(a, b, p);
+    const dVec = sub(p, cp.point);
+    const dist2 = dot(dVec, dVec);
+
+    if (dist2 < (r + slop) * (r + slop)) {
+      const dist = Math.sqrt(dist2);
+      const penetration = r - dist;
+      if (penetration > (bestPenetration ?? -Infinity)) {
+        bestPenetration = penetration;
+        bestContactPoint = cp.point;
+        bestNormal = dist > 1e-12 ? normalize(dVec) : { x: 0, y: 1 };
+        contactIsVertex = false;
+      }
+    }
+  }
+
+  // --- 2) Vertex collisions ---
+  if (allowVertex) {
+    for (let i = 0; i < verts.length; i++) {
+      const v = verts[i];
+      const dVec = sub(p, v);
+      const dist2 = dot(dVec, dVec);
+      const rad2 = r * r;
+
+      if (dist2 < rad2) {
+        const dist = Math.sqrt(dist2);
+        const penetration = r - dist;
+        if (penetration > (bestPenetration ?? -Infinity)) {
+          bestPenetration = penetration;
+          bestNormal = dist > 1e-12 ? normalize(dVec) : { x: 0, y: 1 };
+          bestContactPoint = v;
+          contactIsVertex = true;
+        }
+      }
+    }
+  }
+
+  // --- 3) Particle fully inside polygon ---
+  if (!bestNormal && pointInPolygon(p, poly)) {
+    let minDist = Infinity;
+    let closestEdge = 0;
+    for (let i = 0; i < verts.length; i++) {
+      const a = verts[i];
+      const b = verts[(i + 1) % verts.length];
+      const cp = closestPointOnSegment(a, b, p);
+      const d = length(sub(p, cp.point));
+      if (d < minDist) {
+        minDist = d;
+        bestContactPoint = cp.point;
+        closestEdge = i;
+      }
+    }
+    if (bestContactPoint) {
+      const dVec = sub(p, bestContactPoint);
+      bestNormal = normalize(dVec);
+      bestPenetration = r - minDist;
+      contactIsVertex = false;
+    }
+  }
+
+  // --- 4) No collision ---
+  if (!bestNormal || bestPenetration <= slop) return null;
+
+  // --- 5) Positional correction ---
+  particle.xPred = add(particle.xPred, mulScalar(bestNormal, bestPenetration));
+
+  // --- 6) XPBD-style velocity update (optional, commented out) ---
+  /*
+  const newVel = mulScalar(sub(particle.xPred, particle.prev), 1 / dt);
+  const vn = mulScalar(bestNormal, dot(newVel, bestNormal));
+  const vt = sub(newVel, vn);
+  const vn_after = mulScalar(vn, -restitution);
+  const vt_after = mulScalar(vt, Math.max(0, 1 - friction));
+  const finalVel = add(vn_after, vt_after);
+  particle.prev = sub(particle.xPred, mulScalar(finalVel, dt));
+  */
+
+  return {
+    penetration: bestPenetration,
+    normal: bestNormal,
+    contactPoint: bestContactPoint,
+    contactIsVertex,
+    restitution,
+    friction,
+  };
+}
+
+
+
+/*
 function resolveParticleWallCollision(p: Particle, wall: Wall) {
   const A = wall.A;
   const B = wall.B;
@@ -919,10 +990,12 @@ function resolveParticleWallCollision(p: Particle, wall: Wall) {
   p.v.y -= vt * friction * ty;
   return { x: nx, y: ny }
 }
+  */
 
 
 
 
+/*
 // Resolve all particles in a cluster against multiple sloped walls
 function resolveSlopedWallCollisions(cluster: ShapeCluster2D, walls: Wall[]) {
     for (let p of cluster.particles) {
@@ -931,41 +1004,13 @@ function resolveSlopedWallCollisions(cluster: ShapeCluster2D, walls: Wall[]) {
         }
     }
 }
-
-
-// --- 1. Convert corner points to wall segments ---
-function createTrackSegments(points: Vec2[], restitution = 0.8, friction = 0.8) {
-    const segments = [];
-    for (let i = 0; i < points.length - 1; i++) {
-        segments.push({
-            A: points[i],
-            B: points[i + 1],
-            restitution,
-            friction
-        });
-    }
-    segments.push({
-      A: points[points.length - 1],
-      B: points[0],
-      restitution,
-      friction
-    })
-
-    return segments;
-}
-
-type Wall = {
-    A: {x: number, y: number}  // start point
-    B: {x: number, y: number}  // end point
-    restitution: number        // optional bounce factor
-    friction: number           // optional friction along the slope
-}
+    */
 
 
 let createSim = demo
 // --- Demo setup ---
-function demoTire(trackPoints: Vec2[][], input: InputController){
-  const sim = createSim(trackPoints); // from previous demo: small rectangular cluster
+function demoTire(polygons: Poly[], input: InputController){
+  const sim = createSim(polygons); // from previous demo: small rectangular cluster
 
   // Treat the cluster as a tire
   let tire = new TireController2DPlus(sim.clusters[0], input, TIRE_RADIUS)

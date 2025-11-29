@@ -1,4 +1,4 @@
-import type { Vec2 } from "./vec2";
+import { add, dot, mulScalar, sub, type Vec2 } from "./vec2";
 
 export type Poly = {
     points: Vec2[];        // in CCW order, closed implicitly (last -> first)
@@ -28,7 +28,7 @@ export function buildPoly(inputPoints: Vec2[], restitution = 0, friction = 0): P
     // ---- 1. Ensure polygon is CCW ----
     const signedArea = computeSignedArea(points);
 
-    if (signedArea < 0) {
+    if (signedArea > 0) {
         // CW → reverse → CCW
         points.reverse();
     }
@@ -162,4 +162,29 @@ export function findSegmentAtPoint(points: Vec2[], click: Vec2, eps = 3): number
     }
 
     return -1; // no hit
+}
+
+// Utility: closest point on segment AB to point P, returns {point, t} where t in [0,1]
+export function closestPointOnSegment(A: Vec2, B: Vec2, P: Vec2) {
+  const AB = sub(B, A);
+  const t = (() => {
+    const denom = dot(AB, AB);
+    if (denom === 0) return 0;
+    return Math.max(0, Math.min(1, dot(sub(P, A), AB) / denom));
+  })();
+  return { point: add(A, mulScalar(AB, t)), t };
+}
+
+// Ray-cast point-in-polygon (nonzero winding / standard even-odd)
+export function pointInPolygon(pt: Vec2, poly: Poly): boolean {
+  const verts = poly.points;
+  let inside = false;
+  for (let i = 0, j = verts.length - 1; i < verts.length; j = i++) {
+    const xi = verts[i].x, yi = verts[i].y;
+    const xj = verts[j].x, yj = verts[j].y;
+    const intersect = ((yi > pt.y) !== (yj > pt.y)) &&
+      (pt.x < (xj - xi) * (pt.y - yi) / (yj - yi + 1e-12) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
 }

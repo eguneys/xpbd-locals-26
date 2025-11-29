@@ -45,6 +45,12 @@ export function TouchMouse(el: HTMLElement, hooks: TouchMouse) {
     return [(x - bounds.left) / bounds.width, (y - bounds.top) / bounds.height]
   }
 
+  function on_context_menu(ev: PointerEvent) {
+    ev.preventDefault()
+    let p = normalized(ev)
+    hooks.on_down(p, ev.button)
+  }
+
   function on_down(ev: PointerEvent) {
     el.setPointerCapture(ev.pointerId)
     let p = normalized(ev)
@@ -83,6 +89,7 @@ export function TouchMouse(el: HTMLElement, hooks: TouchMouse) {
   el.addEventListener('pointermove', on_move, { passive: false })
   document.addEventListener('pointerup', on_up)
   el.addEventListener('wheel', on_wheel, { passive: false})
+  el.addEventListener('contextmenu', on_context_menu, { passive: false })
 
 
   new ResizeObserver(on_resize).observe(el)

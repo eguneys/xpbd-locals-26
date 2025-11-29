@@ -1,7 +1,7 @@
+import { draw_polygon } from "./editor";
 import { GameAction, InputController } from "./keyboard";
 import type { SceneName } from "./main";
 import { get_map } from "./maps_store";
-import { Color } from "./webgl/color";
 import { g } from "./webgl/gl_init";
 import { demoTire, type Simulator2D } from "./xpbd";
 
@@ -52,10 +52,9 @@ export function _render() {
 
     g.translate(1920/ 2, 1080 / 2)
 
-    let hover = - 16
     g.begin_shapes()
-    for (let wall of sim.walls) {
-        g.draw_line(wall.A.x + hover, wall.A.y + hover, wall.B.x + hover, wall.B.y + hover, 8, Color.white)
+    for (let poly of sim.polygons) {
+        draw_polygon(poly)
     }
 
     g.end_shapes()
