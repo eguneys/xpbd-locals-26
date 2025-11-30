@@ -1,12 +1,14 @@
-import { draw_polygon } from "./editor";
 import { GameAction, InputController } from "./keyboard";
 import type { SceneName } from "./main";
 import { get_map } from "./maps_store";
+import type { Poly } from "./math/polygon";
+import { Color } from "./webgl/color";
 import { g } from "./webgl/gl_init";
-import { demoTire, type Simulator2D } from "./xpbd";
+import type { Particle } from "./xpbd";
+import { Simulator2D_XPBD, demoSim } from './xpbd_2'
 
 let kb: InputController
-let sim: Simulator2D
+let sim: Simulator2D_XPBD
 
 /*
 const trackPointss = [
@@ -21,7 +23,7 @@ const trackPointss = [
 
 export function _init() {
     kb = new InputController()
-    let dt = demoTire(get_map(), {
+    sim = demoSim(get_map(), {
         get jump_pressed() {
             return kb.wasPressed(GameAction.JUMP)
         },
@@ -32,7 +34,6 @@ export function _init() {
             return kb.isDown(GameAction.RIGHT) ? 1 : (kb.isDown(GameAction.LEFT) ? -1 : 0)
         }
     })
-    sim = dt.sim
 }
 
 export function _update(delta: number) {
@@ -52,12 +53,14 @@ export function _render() {
 
     g.translate(1920/ 2, 1080 / 2)
 
+    /*
     g.begin_shapes()
     for (let poly of sim.polygons) {
         draw_polygon(poly)
     }
 
     g.end_shapes()
+    */
     /*
 
     cx.strokeStyle = 'white'
@@ -85,20 +88,30 @@ export function _render() {
     g.end_shapes()
     */
 
+
+
+    g.begin_shapes()
+
+    for (let p of sim.particles) {
+        draw_particle(p)
+    }
+    g.end_shapes()
+
+    /*
     g.begin_render()
 
-    let ccx = 0, cy = 0
+    let cx = 0, cy = 0
     for (let p of sim.particles) {
-        ccx += p.x.x
+        cx += p.x.x
         cy += p.x.y
     }
-    ccx /= 6
+    cx /= 6
     cy /= 6
 
     for (let i = 0; i < 6; i++) {
         let p1 = sim.particles[i].x
-        let p2 = sim.particles[i === 5 ? 0 : i + 1].x
-        let p3 = { x: ccx, y: cy }
+        let p2 = sim.particles[(i + 1) % 6].x
+        let p3 = { x: cx, y: cy }
 
         let u: [number, number, number] = [0, 64, 32]
         let v: [number, number, number] = [210, 210, 210 + 64]
@@ -108,8 +121,37 @@ export function _render() {
     }
     g.end_render()
 
+    */
 
 }
+
+export function draw_particle(p: Particle) {
+
+    g.draw_line(p.x.x - 4, p.x.y - 4, p.x.x + 8, p.x.y + 8, 4, Color.grey)
+}
+
+
+export function draw_polygon(polygon: Poly) {
+
+    let p = polygon.points[0]
+    let p2
+
+    for (let i = 1; i < polygon.points.length; i++) {
+
+        p2 = polygon.points[i]
+
+        g.draw_line(p.x, p.y, p2.x, p2.y, 8, Color.white)
+
+        p = p2
+    }
+
+    p2 = polygon.points[0]
+    g.draw_line(p.x, p.y, p2.x, p2.y, 8, Color.white)
+}
+
+
+
+
 export function _destroy() {
     kb.destroy()
 }

@@ -43,7 +43,7 @@ function _init() {
     current_scene = default_scene
     next_scene = current_scene
 
-    switch_to_scene(editor)
+    switch_to_scene(simulate)
 }
 
 function _update(delta: number) {

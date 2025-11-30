@@ -6,9 +6,11 @@ import { pointInPolygon, type Poly } from "./math/polygon"
 import { add, dot, length, mulScalar, normalize, sub, vec2, type Vec2 } from "./math/vec2"
 
 
-const NB_ITERATIONS = 3
-const SHAPE_COMPLIANCE = 1e-4
-const SHAPE_STIFFNESS = 6.56
+const SUBSTEPS = 30
+const GRAVITY_Y = 8e5
+const NB_ITERATIONS = 8
+const SHAPE_COMPLIANCE = 0.0001
+const SHAPE_STIFFNESS = 3.56
 
 
 // ---- linear algebra helpers for 2D ----
@@ -88,10 +90,21 @@ function polarRotation2x2(A: Mat2){
   return matMul(A, invSqrt);
 }
 
-const TIRE_RADIUS = 40
+const TIRE_RADIUS = 60
 const R_tire = TIRE_RADIUS
 const N = 6
 let ParticleRadius = 2 * Math.PI * R_tire / N / 2;
+
+
+type CollisionContact = {
+  penetration: number;
+  normal: Vec2;
+  contactPoint: Vec2;
+  contactIsVertex: boolean;
+  restitution: number;
+  friction: number;
+}
+
 
 // ---- Particle and Cluster classes ----
 class Particle {
@@ -105,6 +118,8 @@ class Particle {
 
     radius = ParticleRadius
 
+    collisionContact: CollisionContact | null
+
   constructor(x: number, y: number, mass=1){
     this.x = vec2(x,y);      // position
     this.prev = vec2(x, y) // previous position
@@ -112,6 +127,7 @@ class Particle {
     this.m = mass;           // mass
     this.invMass = mass > 0 ? 1 / mass : 0;
     this.xPred = vec2(x,y);  // predicted position for the timestep
+    this.collisionContact = null
   }
 }
 
@@ -355,7 +371,7 @@ class Simulator2D {
     this.polygons = []
     this.particles = [];
     this.clusters = []; // array of ShapeCluster2D
-    this.gravity = vec2(0, 2000); // y-down (pixels/sec^2) - tune to your world
+    this.gravity = vec2(0, GRAVITY_Y); // y-down (pixels/sec^2) - tune to your world
     this.iterations = NB_ITERATIONS; // solver iterations per step
   }
 
@@ -366,61 +382,49 @@ class Simulator2D {
     this.tireController = tire_controller
   }
 
-  // simple ground collision: push up to y >= groundY and simple velocity update
-  resolveCollisions(predicted: Particle[]){
-    const groundY = 500; // example ground line
-    for(let p of predicted){
-      if (p.xPred.y > groundY){
-        p.xPred.y = groundY;
-        if (p.v.y > 0) p.v.y *= -0.2; // bounce/damping
-      }
+  step(dt: number) {
+    const sdt = dt / SUBSTEPS
+
+    for (let step = 0; step < SUBSTEPS; step++) {
+      this.substep(sdt)
     }
   }
 
-  step(dt: number){
-
-    for (let p of this.particles) {
-        p.prev.x = p.x.x
-        p.prev.y = p.x.y
-    }
+  substep(dt: number){
 
     let ctrl = this.tireController
+    let cl = ctrl.cluster
+    if (!cl.xbar) {
+        cl.xbar = cl.computeCOMPred()
+    }
 
-    // 1) external forces -> update velocities and predict positions
-    for(let p of this.particles){
-      // semi-implicit: v += dt * a
-      p.v = add(p.v, mulScalar(this.gravity, dt));
+    for (let p of this.particles) {
+      const v = sub(p.x, p.prev)
+      const accel = add(this.gravity, { x: 0, y: 0})
+      p.xPred = add(p.x, v)
+      p.xPred = add(p.xPred, mulScalar(accel, dt * dt))
     }
 
     ctrl.handleInput(dt)
 
     if (ctrl.jumpBufferTimer > 0 && ctrl.coyoteTimer > 0) {
-        ctrl.doJump()
+        ctrl.doJump(dt)
     }
+
+
+
+
+    ctrl.applyAirRotation(dt)
     ctrl.applyAirControl(dt)
-    ctrl.applyAirDrag()
+    ctrl.applyAirDrag(dt)
+    //ctrl.moveCOM(dt)
+    ctrl.applyGroundTorque(dt)
+    ctrl.applyTorque(dt)
+    ctrl.variableJump(dt)
 
-    let cl = ctrl.cluster
-    if (!cl.xbar) {
-        cl.xbar = cl.computeCOMPred()
-    }
-      //ctrl.moveCOM(dt)
-      ctrl.applyGroundTorque(dt)
-      ctrl.applyTorque(dt)
-      ctrl.variableJump(dt)
-
-      //ctrl.applyRadialSprings(dt)
-
-      for (let p of ctrl.cluster.particles) {
-          p.xPred = add(p.x, mulScalar(p.v, dt));
-      }
 
     // 2) initial collision pass (optional)
-    //this.resolveCollisions(this.particles);
     for (let cl of this.clusters) {
-      //resolveFlatCollisions(cl, this.platforms, dt, this.gravity.y, 0.8)
-      //resolveSlopedWallCollisions(cl, this.walls)
-      //resolveClusterHullCollision(cl, this.walls)
       resolvePolygonCollisions(cl, this.polygons, dt)
     }
 
@@ -432,36 +436,21 @@ class Simulator2D {
           cl.project(dt);
       }
 
-      // do a final collision pass (ensures non-penetration after projections)
-      //this.resolveCollisions(this.particles);
-
-        for (let cl of this.clusters) {
-            //resolveFlatCollisions(cl, this.platforms, dt, this.gravity.y, 0.8)
-          //resolveSlopedWallCollisions(cl, this.walls)
-          //resolveClusterHullCollision(cl, this.walls)
-
-          resolvePolygonCollisions(cl, this.polygons, dt)
-        }
+      for (let cl of this.clusters) {
+        resolvePolygonCollisions(cl, this.polygons, dt)
+      }
 
 
     }
-
-    /*
-    for (let cl of this.clusters) {
-      cl.updateClusterGrounded(this.walls)
-    }
-      */
-
-    console.log(cl.is_grounded)
-
 
     // 4) finalize positions and update velocities
     for(let p of this.particles){
       // v = (x_new - x_old) / dt
-      const newV = mulScalar(sub(p.xPred, p.x), 1/dt);
-      p.v = newV;
-      p.x = p.xPred;
+      p.v = mulScalar(sub(p.xPred, p.prev), 1/dt);
+      p.prev = { ...p.x }
+      p.x = { ... p.xPred };
     }
+    console.log(this.particles[0].v)
   }
 }
 
@@ -574,7 +563,7 @@ export { Particle, ShapeCluster2D, Simulator2D, demo };
 
 // --- Tire controller ---
 
-type InputController = { 
+export type InputController = { 
     jump_pressed: boolean
     jump_held: boolean
     x: number
@@ -592,14 +581,16 @@ export class TireController2DPlus {
 
     jumpHoldTimer: number
 
-    JUMP_STRENGTH: number
+    JUMP_IMPULSE: number
     MAX_JUMP_HOLD: number
     HOLD_GRAVITY_FACTOR: number
 
     COYOTE_TIME: number
     JUMP_BUFFER: number
 
-    AIR_CONTROL: number
+    MAX_ANGULAR: number
+
+    AIR_CONTROL_ACCEL: number
     MAX_AIR_ANGULAR: number
 
     AIR_DRAG: number
@@ -627,20 +618,22 @@ export class TireController2DPlus {
         this.jumpActive = false;
         this.jumpHoldTimer = 0;
 
+        this.MAX_ANGULAR = 60;
+
         // Constants (tune these!)
-        this.JUMP_STRENGTH = 500;
-        this.MAX_JUMP_HOLD = .3;         // seconds
-        this.HOLD_GRAVITY_FACTOR = 0.3;   // reduces gravity while holding jump
+        this.JUMP_IMPULSE = 3000;
+        this.MAX_JUMP_HOLD = .2;         // seconds
+        this.HOLD_GRAVITY_FACTOR = .5;   // reduces gravity while holding jump
         this.COYOTE_TIME = .5;           // seconds
         this.JUMP_BUFFER = .5;           // seconds
 
-        this.AIR_CONTROL = 0.5;
+        this.AIR_CONTROL_ACCEL = 8;
         this.MAX_AIR_ANGULAR = 3;
         this.AIR_DRAG = 0.98;
-        this.AIR_DRAG_LINEAR = 0.995;
+        this.AIR_DRAG_LINEAR = 0.1
 
-        this.GROUND_FRICTION = 1.9;
-        this.GRAVITY = 3000;              // positive down
+        this.GROUND_FRICTION = 1;
+        this.GRAVITY = GRAVITY_Y;              // positive down
 
         this.HORIZONTAL_SPEED = 1000
 
@@ -657,102 +650,192 @@ export class TireController2DPlus {
         else this.coyoteTimer -= dt;
     }
 
-    applyAirControl(dt: number) {
-        if (this.cluster.is_grounded) return;
+  applyAirControl(dt: number) {
+    const cl = this.cluster;
+    if (cl.is_grounded) return;
 
-        const targetAngular = this.input.x * this.MAX_AIR_ANGULAR;
-        const deltaAngular = targetAngular - this.angularVelocity;
+    const inputX = this.input.x;
+    const airAccel = this.AIR_CONTROL_ACCEL * dt;
 
-        this.angularVelocity += deltaAngular * this.AIR_CONTROL * dt;
+    cl.xbar.x += inputX * airAccel;
+    for (let p of cl.particles) {
+      p.xPred.x += inputX * airAccel;
+    }
+  }
+
+    
+  applyAirDrag(_dt: number) {
+    const cl = this.cluster;
+    if (cl.is_grounded) return;
+
+    this.angularVelocity *= this.AIR_DRAG; // 0.98–0.995 typical
+
+    for (let p of cl.particles) {
+      const dx = p.xPred.x - p.x.x;
+      const dy = p.xPred.y - p.x.y;
+      p.xPred.x = p.x.x + dx * this.AIR_DRAG_LINEAR;
+      p.xPred.y = p.x.y + dy * this.AIR_DRAG_LINEAR;
+    }
+  }
+
+
+    doJump(dt: number) {
+    const cl = this.cluster;
+
+    // compute COM vertical "velocity" from predicted positions
+    let vCOM = 0;
+    let massSum = 0;
+    for (let p of cl.particles) {
+        const v = (p.xPred.y - p.x.y) / dt;  // derived velocity
+        vCOM += v / p.invMass;
+        massSum += 1 / p.invMass;
+    }
+    vCOM /= massSum;
+
+    // desired jump impulse
+    const netImpulse = this.JUMP_IMPULSE + Math.max(0, vCOM);
+
+    // convert impulse to position-space change
+    for (let p of cl.particles) {
+        p.xPred.y -= netImpulse * dt * p.invMass; // XPBD-friendly
     }
 
-    applyAirDrag() {
-        if (this.cluster.is_grounded) return;
+    this.jumpActive = true;
+    this.jumpHoldTimer = 0;
+    this.jumpBufferTimer = 0;
+    this.coyoteTimer = 0;
+}
 
-        this.angularVelocity *= this.AIR_DRAG;
-        for (let p of this.cluster.particles) p.v.x *= this.AIR_DRAG_LINEAR;
+
+  variableJump(dt: number) {
+    if (!this.jumpActive || !this.input.jump_held) {
+      this.jumpActive = false;
+      return;
     }
 
-    doJump() {
-        // compute cluster COM vertical velocity
-        let vCOM = 0;
-        let massSum = 0;
-        for (let p of this.cluster.particles) {
-            vCOM += p.v.y / p.invMass;
-            massSum += 1 / p.invMass;
-        }
-        vCOM /= massSum;
+    this.jumpHoldTimer += dt;
 
-        const netImpulse = this.JUMP_STRENGTH + Math.max(0, vCOM);
-        for (let p of this.cluster.particles) {
-            p.v.y -= netImpulse * p.invMass;
-        }
+    if (this.jumpHoldTimer < this.MAX_JUMP_HOLD) {
 
-        this.jumpActive = true;
-        this.jumpHoldTimer = 0;
-        this.jumpBufferTimer = 0;
-        this.coyoteTimer = 0;
+      // This acts as "cancel gravity" AND "add upward velocity"
+      const impulse = this.JUMP_IMPULSE * (1 - this.HOLD_GRAVITY_FACTOR);
+
+      for (const p of this.cluster.particles) {
+        p.xPred.y -= impulse * dt;
+      }
     }
+  }
 
-    variableJump(dt: number) {
-        if (!this.jumpActive || !this.input.jump_held) {
-            this.jumpActive = false;
-            return;
-        }
+  applyAirRotation(dt: number) {
+    const cl = this.cluster;
+    if (cl.is_grounded) return;
 
-        this.jumpHoldTimer += dt;
-        if (this.jumpHoldTimer < this.MAX_JUMP_HOLD) {
-            for (let p of this.cluster.particles) {
-                p.v.y -= this.GRAVITY * (1 - this.HOLD_GRAVITY_FACTOR) * dt;
-            }
-        }
+    const scale = 0.3; // reduce torque effect in air
+
+    for (let p of cl.particles) {
+      const r = sub(p.xPred, cl.xbar);
+      const rLen = Math.hypot(r.x, r.y);
+      if (rLen > 0) {
+        const tangent = { x: -r.y / rLen, y: r.x / rLen };
+        const deltaPos = mulScalar(tangent, this.angularVelocity * rLen * dt * scale);
+        p.xPred = add(p.xPred, deltaPos);
+      }
     }
+  }
+
 
     applyTorque(dt: number) {
+      let cl = this.cluster
 
-        let cl = this.cluster
+      let dx = 0, dy = 0;
+      let n = cl.particles.length;
 
-        for (let p of cl.particles){
-            const r = { x: p.xPred.x - cl.xbar.x, y: p.xPred.y - cl.xbar.y };
-            const rLen = Math.hypot(r.x, r.y);
-            if (rLen > 0) {
-                const tangential = { x: -r.y / rLen, y: r.x / rLen }; // correct rotation direction
-                p.v = add(p.v, mulScalar(tangential, this.angularVelocity * rLen));
-            }
+      // 1) rotate particles around COM
+      for (let p of cl.particles) {
+        const r = sub(p.xPred, cl.xbar);
+        const rLen = Math.hypot(r.x, r.y);
+        if (rLen > 0) {
+          const tangential = { x: -r.y / rLen, y: r.x / rLen };
+          const delta = mulScalar(tangential, this.angularVelocity * rLen * dt);
+
+          p.xPred = add(p.xPred, delta);
+
+          dx += delta.x;
+          dy += delta.y;
         }
+      }
+
+      // 2) subtract mean delta to avoid COM drifting
+      dx /= n;
+      dy /= n;
+
+      for (let p of cl.particles) {
+        p.xPred.x -= dx;
+        p.xPred.y -= dy;
+      }
 
 
-        if (this.cluster.is_grounded) {
-            const radius = 20;
-            const linearVel = this.angularVelocity * radius;
-            cl.xbar.x += linearVel * dt;
-            for (let p of cl.particles) p.xPred.x += linearVel * dt;
+
+      const contactParticles = cl.particles.filter(
+        //p => (p.xPred.y - cl.xbar.y) < 0
+        p => p.collisionContact !== null
+      );
+
+      let grounded = contactParticles.length > 0
+      this.cluster.is_grounded = grounded
+
+      if (grounded) {
+        const radius = 20;
+        const linearVel = this.angularVelocity * radius;
+        const deltaX = linearVel * dt;
+
+        cl.xbar.x += deltaX;
+        for (let p of cl.particles) {
+          p.xPred.x += deltaX;
         }
+      }
 
 
-        // 3. friction at contacts
-        //const contactParticles = cl.particles.filter(p=>p.xPred.y>=this.groundY-1e-3);
-        const contactParticles = cl.particles.filter(p =>
-            sub(p.xPred, cl.xbar).y > 0
-        );
+
+      if (grounded) {
+
+        const mu = this.GROUND_FRICTION;
+
+        let totalFriction = 0;
+
         for (let p of contactParticles) {
-            const vTang = p.v.x;
-            const normalForce = p.m * 8200
-            const maxFriction = 0.8 * this.GROUND_FRICTION * normalForce * dt
-            const frictionImpulse = Math.max(-maxFriction, Math.min(maxFriction, -vTang * p.m));
-            p.v.x += frictionImpulse / p.m;
+
+          // tangential slip velocity based on xPred
+          const vTang = (p.xPred.x - p.prev.x) / dt;
+
+          // friction "impulse" in position-space
+          const frictionDelta = -vTang * mu * dt;
+
+          p.xPred.x += frictionDelta;
+
+          totalFriction += frictionDelta;
         }
+
+        // prevent friction from dragging COM
+        const correction = totalFriction / cl.particles.length;
+        for (let p of cl.particles) {
+          p.xPred.x -= correction;
+        }
+      }
+
     }
 
     applyGroundTorque(dt: number) {
-        if (!this.cluster.is_grounded) return;
+      // TODO 
+        //if (!this.cluster.is_grounded) return;
 
-        let GROUND_TORQUE = 6; // tuning
+        let GROUND_TORQUE = 80; // tuning
         if (Math.sign(this.angularVelocity) !== Math.sign(this.input.x)) {
-            GROUND_TORQUE = 30
+            GROUND_TORQUE = 120
             this.angularVelocity *= 0.001
         }
         this.angularVelocity += this.input.x * GROUND_TORQUE * dt;
+        this.angularVelocity = Math.min(this.MAX_ANGULAR, Math.max(-this.MAX_ANGULAR, this.angularVelocity))
 
         if (this.input.x === 0) {
             this.angularVelocity *= 0.001
@@ -798,8 +881,13 @@ export class TireController2DPlus {
 
 function resolvePolygonCollisions(cluster: ShapeCluster2D, polygons: Poly[], dt: number) {
     for (let p of cluster.particles) {
-        for (let wall of polygons) {
-            resolveParticlePolygon(p, wall, { dt });
+      p.collisionContact = null
+        for (let polygon of polygons) {
+            let res = resolveParticlePolygon(p, polygon, { dt });
+
+            if (res !== null) {
+              p.collisionContact = res
+            }
         }
     }
 }
@@ -822,7 +910,7 @@ function resolveParticlePolygon(
     slop?: number;
     allowVertexCollisions?: boolean;
   }
-) {
+): CollisionContact | null {
   const dt = options?.dt ?? 1.0;
   const restitution = options?.restitution ?? 0.0;
   const friction = options?.friction ?? 0.2;
@@ -890,7 +978,7 @@ function resolveParticlePolygon(
   // --- 3) Particle fully inside polygon ---
   if (!bestNormal && pointInPolygon(p, poly)) {
     let minDist = Infinity;
-    let closestEdge = 0;
+    //let closestEdge = 0;
     for (let i = 0; i < verts.length; i++) {
       const a = verts[i];
       const b = verts[(i + 1) % verts.length];
@@ -899,7 +987,7 @@ function resolveParticlePolygon(
       if (d < minDist) {
         minDist = d;
         bestContactPoint = cp.point;
-        closestEdge = i;
+        //closestEdge = i;
       }
     }
     if (bestContactPoint) {
@@ -917,7 +1005,6 @@ function resolveParticlePolygon(
   particle.xPred = add(particle.xPred, mulScalar(bestNormal, bestPenetration));
 
   // --- 6) XPBD-style velocity update (optional, commented out) ---
-  /*
   const newVel = mulScalar(sub(particle.xPred, particle.prev), 1 / dt);
   const vn = mulScalar(bestNormal, dot(newVel, bestNormal));
   const vt = sub(newVel, vn);
@@ -925,12 +1012,12 @@ function resolveParticlePolygon(
   const vt_after = mulScalar(vt, Math.max(0, 1 - friction));
   const finalVel = add(vn_after, vt_after);
   particle.prev = sub(particle.xPred, mulScalar(finalVel, dt));
-  */
 
+  console.log(dt)
   return {
     penetration: bestPenetration,
     normal: bestNormal,
-    contactPoint: bestContactPoint,
+    contactPoint: bestContactPoint!,
     contactIsVertex,
     restitution,
     friction,
