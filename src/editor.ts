@@ -25,7 +25,7 @@ function screenToWorld(screenX: number, screenY: number) {
 /**
  * Converts a world point to a screen point (used for drawing).
  */
-function worldToScreen(worldX: number, worldY: number) {
+export function worldToScreen(worldX: number, worldY: number) {
 
     // (World * Zoom) + Center + CameraOffset
 

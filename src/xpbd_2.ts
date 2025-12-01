@@ -395,7 +395,7 @@ function createTire(sim: Simulator2D_XPBD, center: Vec2, radius: number, particl
 }
 
     let TIRE_RADIUS = 80
-export function demoSim(polygons: Poly[], input: InputController) {
+export function demoSim(_polygons: Poly[], input: InputController) {
 
     let sim = new Simulator2D_XPBD()
 

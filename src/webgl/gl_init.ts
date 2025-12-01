@@ -193,7 +193,7 @@ export function GL(width: number, height: number): GL {
             this.draw_line(cx, cy, dx, dy, thickness, color)
             this.draw_line(dx, dy, ax, ay, thickness, color)
         },
-        fill_rect(x: number, y: number, w: number, h: number, color: Color, theta = 0) {
+        fill_rect(x: number, y: number, w: number, h: number, color: Color, _theta = 0) {
             let rect = Rectangle.make(x, y, w, h)
             rect = rect.transform(Matrix.identity.translate(t_x, t_y).scale(s_x, s_y))
             shape_batch.draw_rect(rect, 0, 0, 0, 0, color.rgba)
